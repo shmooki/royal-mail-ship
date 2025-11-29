@@ -7,8 +7,9 @@
 #define CONNECTIONS_LIMIT 5
 
 void strip_newline(char* input, char* destination) {
-    input[strcspn(input, "\n")] = '\0';
-    strncpy(destination, input, sizeof(*destination));
+    size_t length = strcspn(input, "\n");
+    strncpy(destination, input, length);
+    destination[length] = '\0';
 }
 
 void clear_stdin() {
@@ -38,21 +39,29 @@ int client_setup(const char *ip, int port) {
 }
 
 int main() {
+    //raspberry pi, 74.141.133.28:55555
     char server_ip[INET_ADDRSTRLEN] = "127.0.0.1";
     int port = 8080;
 
     printf("[Client]: Server IP to connect to? (press enter to use 127.0.0.1)\n");
     char input_ip[INET_ADDRSTRLEN];
     fgets(input_ip, sizeof(input_ip), stdin);
-    if (input_ip[0] != '\n') {
-        strip_newline(input_ip, server_ip);
+    strip_newline(input_ip, server_ip);
+    if (strlen(server_ip) == 0) {
+        strncpy(server_ip, "127.0.0.1", sizeof(server_ip));
     }
 
     printf("[Client]: Server Port to connect to? (press enter to use 8080)\n");
     char input_port[16];
     fgets(input_port, sizeof(input_port), stdin);
-    if (input_port[0] != '\n')
+    strip_newline(input_port, input_port);
+    if (strlen(input_port) > 0) {
         port = atoi(input_port);
+        if (port <= 0 || port > 65535) {
+            printf("[Error]: Invalid port number. Using default port 8080.\n");
+            port = 8080;
+        }
+    }
 
     int client = client_setup(server_ip, port);
     if (client < 0) {
