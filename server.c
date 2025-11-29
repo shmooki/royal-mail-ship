@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <sys/socket.h>
 #include <stdlib.h>
 #include <unistd.h>
 #include <string.h>
@@ -15,7 +16,7 @@ int setup(int port) {
     struct sockaddr_in server;
     server.sin_family = AF_INET;
     server.sin_port = htons(port);
-    server.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    server.sin_addr.s_addr = htonl(INADDR_ANY);
 
     int server_socket = socket(AF_INET, SOCK_STREAM, 0);
     if (server_socket < 0) {
@@ -113,7 +114,11 @@ int main(void) {
             continue;
         }
 
-        *client = accept(server_socket, NULL, NULL);
+        // *client = accept(server_socket, NULL, NULL);
+        struct sockaddr_in client_addr;
+        socklen_t client_len = sizeof(client_addr);
+        *client = accept(server_socket, (struct sockaddr *)&client_addr, &client_len);
+        
         if (*client < 0) {
             printf("Failed to accept client.\n");
             free(client);
