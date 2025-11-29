@@ -39,7 +39,6 @@ int client_setup(const char *ip, int port) {
 }
 
 int main() {
-    //raspberry pi, 74.141.133.28:55555
     char server_ip[INET_ADDRSTRLEN] = "127.0.0.1";
     int port = 8080;
 
