@@ -39,7 +39,7 @@ struct channel {
     uint64_t participant_ids[25];
     int gated;
     int gate_type;
-    struct packet message_buffer[MSG_BUFFER_LIMIT];
+    struct encrypted_packet message_buffer[MSG_BUFFER_LIMIT];
 };
 
 #endif //RMS_CHANNEL_H

@@ -18,7 +18,8 @@
 int server_fd;
 
 // RSA Keys
-long n, e, d;
+long s_n, s_e, s_d;
+long c_n, c_e;
 
 // Client Management
 pthread_mutex_t c_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -29,7 +30,7 @@ int num_clients = 0;
 struct channel channels[CLIENTS_LIMIT] = {};
 int num_channels = 0;
 
-int init(int port) {
+int s_init(int port) {
     struct sockaddr_in serv = {0};
 
     serv.sin_family = AF_INET;
@@ -71,20 +72,22 @@ int insert_client(struct client *new_client) {
 }
 
 void rsa_handshake(int client_fd) {
-    send(client_fd, &n, sizeof(long), 0);
-    send(client_fd, &e, sizeof(long), 0);
+    send(client_fd, &s_n, sizeof(long), 0);
+    send(client_fd, &s_e, sizeof(long), 0);
+    recv(client_fd, &c_n, sizeof(long), 0);
+    recv(client_fd, &c_e, sizeof(long), 0);
 }
 
 void channel_handshake(int client_fd, struct channel *channel) {
-    send(client_fd, channel->message_buffer, sizeof(struct packet) * MSG_BUFFER_LIMIT, 0);
+    send(client_fd, channel->message_buffer, sizeof(struct encrypted_packet) * MSG_BUFFER_LIMIT, 0);
 }
 
 void *worker(void *arg) {
     struct client *c = (struct client *)arg;
 
     for (;;) {
-        struct packet p;
-        recv(c->socket_fd, &p, sizeof(struct packet), 0);
+        struct encrypted_packet p;
+        recv(c->socket_fd, &p, sizeof(struct encrypted_packet), 0);
 
         printf("%ld\n%s\n", p.sender_id, p.payload);
     }
@@ -139,7 +142,7 @@ void load_channels() {
 
         int msg_index = 0;
         while (msg_index < MSG_BUFFER_LIMIT) {
-            struct packet *p = &ch.message_buffer[msg_index];
+            struct encrypted_packet *p = &ch.message_buffer[msg_index];
 
             uint64_t msg_id, sender_id, timestamp;
             int type;
@@ -177,11 +180,11 @@ void load_channels() {
 
 int main() {
     srand(time(NULL));
-    generate_rsa_keys(&n, &e, &d);
+    generate_rsa_keys(&s_n, &s_e, &s_d);
 
     printf("Generated RSA keys:\n");
-    printf("Public Key (n, e): (%ld, %ld)\n", n, e);
-    printf("Private Key (d): %ld\n", d);
+    printf("Public Key (n, e): (%ld, %ld)\n", s_n, s_e);
+    printf("Private Key (d): %ld\n", s_d);
 
     int port = 8080;
     printf("\n• What port to listen on?\n> ");
@@ -192,7 +195,7 @@ int main() {
         return 1;
     }
 
-    server_fd = init(port);
+    server_fd = s_init(port);
     if (server_fd < 0) {
         printf("• Server failed to start.\n");
         return 1;

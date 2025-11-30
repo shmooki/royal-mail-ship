@@ -12,7 +12,7 @@
  *          3 = Text + File
  */
 
-struct packet {
+struct encrypted_packet {
     uint64_t msg_id;
     uint64_t sender_id;
     uint64_t channel_id;
