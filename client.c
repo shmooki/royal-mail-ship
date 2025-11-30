@@ -4,25 +4,29 @@
 #include <unistd.h>
 #include <pthread.h>
 #include <arpa/inet.h>
+#include <time.h>
 #include "utility.h"
 #include "rsa.h"
 #include "encrypted_packet.h"
 
-// Critical Information
-int server_fd;
+// Server File Descriptor
+int server_fd = -1;
 
 // RSA Keys
 long s_n, s_e;
 long c_n, c_e, c_d;
 
-void rsa_handshake() {
-    recv(server_fd, &s_n, sizeof(long), 0);
-    recv(server_fd, &s_e, sizeof(long), 0);
-    send(server_fd, &c_n, sizeof(long), 0);
-    send(server_fd, &c_e, sizeof(long), 0);
+void rsa_handshake(int fd) {
+    recv(fd, &s_n, sizeof(long), 0);
+    recv(fd, &s_e, sizeof(long), 0);
+
+    send(fd, &c_n, sizeof(long), 0);
+    send(fd, &c_e, sizeof(long), 0);
+
+    printf("\n• RSA Handshake | Public Key (n, e): (%ld, %ld)\n", s_n, s_e);
 }
 
-int c_init(char *ip, int port) {
+int c_init(const char *ip, int port) {
     struct sockaddr_in serv = {0};
 
     serv.sin_family = AF_INET;
@@ -30,52 +34,71 @@ int c_init(char *ip, int port) {
     inet_pton(AF_INET, ip, &serv.sin_addr);
 
     int fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (fd < 0) return -1;
+    if (fd < 0)
+        return -1;
 
     if (connect(fd, (struct sockaddr *)&serv, sizeof(serv)) < 0)
         return -1;
 
-    rsa_handshake();
+    rsa_handshake(fd);
 
     server_fd = fd;
     return 0;
 }
 
-void message_bar_thread() {
+void *message_bar_thread() {
     char input[512];
+
     for (;;) {
         printf("> ");
-        if (fgets(input, sizeof(input), stdin) != NULL) {
-            input[strcspn(input, "\n")] = 0;
+        if (!fgets(input, sizeof(input), stdin))
+            continue;
 
-            size_t input_len = strlen(input) + 1;
-            long *encrypted_payload = encrypt(input, s_e, s_n, &input_len);
+        input[strcspn(input, "\n")] = 0;
+        if (strlen(input) == 0)
+            continue;
 
-            struct encrypted_packet p;
-            p.sender_id = generate_uuid(10);
-            p.channel_id = 1;
-            p.msg_id = generate_uuid(10);
-            p.timestamp = (uint32_t)time(NULL);
-            p.payload = *encrypted_payload;
+        size_t enc_len = 0;
+        long *cipher = encrypt(input, s_e, s_n, &enc_len);
 
-            send(server_fd, &p, sizeof(struct encrypted_packet), 0);
+        if (!cipher) continue;
 
-            if (encrypted_payload) {
-                free(encrypted_payload);
-            }
-        }
+        struct encrypted_packet p = {0};
+
+        p.sender_id  = generate_uuid(10);
+        p.channel_id = 1;
+        p.msg_id     = generate_uuid(10);
+        p.timestamp  = (uint32_t)time(NULL);
+        p.len        = (uint32_t)enc_len;
+
+        if (enc_len > MAX_ENCRYPTED_PAYLOAD)
+            enc_len = MAX_ENCRYPTED_PAYLOAD;
+
+        for (size_t i = 0; i < enc_len; i++)
+            p.encrypted_payload[i] = cipher[i];
+
+        send(server_fd, &p, sizeof(p), 0);
+
+        free(cipher);
     }
 }
 
-void payload_receiver_thread() {
+void *payload_receiver_thread() {
     for (;;) {
-        struct encrypted_packet p;
-        recv(server_fd, &p, sizeof(struct encrypted_packet), 0);
+        struct encrypted_packet p = {0};
 
-        char *decrypted_payload = decrypt(&p.payload, sizeof(p.payload), c_d, c_n);
+        ssize_t received = recv(server_fd, &p, sizeof(p), 0);
+        if (received <= 0)
+            continue;
 
-        printf("\n%ld\n%s\n> ", p.sender_id, decrypted_payload);
-        free(decrypted_payload);
+        char *plaintext = decrypt(p.encrypted_payload, p.len, c_d, c_n);
+        if (!plaintext)
+            continue;
+
+        printf("\n[%lu] %s\n> ", p.sender_id, plaintext);
+        fflush(stdout);
+
+        free(plaintext);
     }
 }
 
@@ -83,24 +106,29 @@ int main() {
     srand(time(NULL));
     generate_rsa_keys(&c_n, &c_e, &c_d);
 
-    char ip[16] = "";
+    char ip[32];
     int port = 8080;
 
-    printf("• Enter server IP address:\n> ");
+    printf("• Enter server IP:\n> ");
     fgets(ip, sizeof(ip), stdin);
     ip[strcspn(ip, "\n")] = 0;
 
-    printf("\n• Enter server port:\n> ");
+    printf("\n• Enter port:\n> ");
     scanf("%d", &port);
-
     flush_buffer();
 
-    system("clear");
-    printf("\n> ");
+    if (c_init(ip, port) < 0) {
+        printf("• Connection failed.\n");
+        return 1;
+    }
 
-    pthread_t message_bar_thread = 0;
-    pthread_t payload_receiver_thread = 0;
+    pthread_t t_send, t_recv;
 
-    pthread_create(&message_bar_thread, NULL, (void *)message_bar_thread, NULL);
-    pthread_create(&payload_receiver_thread, NULL, (void *)payload_receiver_thread, NULL);
+    pthread_create(&t_send, NULL, message_bar_thread, NULL);
+    pthread_create(&t_recv, NULL, payload_receiver_thread, NULL);
+
+    pthread_join(t_send, NULL);
+    pthread_join(t_recv, NULL);
+
+    return 0;
 }

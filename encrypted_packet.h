@@ -1,15 +1,17 @@
 #pragma once
-#include <inttypes.h>
 
-#ifndef RMS_ENCRYPTED_PACKET_H
-#define RMS_ENCRYPTED_PACKET_H
+#ifndef ENCRYPTED_PACKET_H
+#define ENCRYPTED_PACKET_H
+
+#define MAX_ENCRYPTED_PAYLOAD 256
 
 struct encrypted_packet {
     uint64_t sender_id;
     uint64_t channel_id;
     uint64_t msg_id;
     uint32_t timestamp;
-    long payload;
+    uint32_t len;
+    long encrypted_payload[MAX_ENCRYPTED_PAYLOAD];
 };
 
-#endif //RMS_ENCRYPTED_PACKET_H
+#endif

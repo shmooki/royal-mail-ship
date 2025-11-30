@@ -1,5 +1,4 @@
 #pragma once
-#include <inttypes.h>
 
 #ifndef RMS_PACKET_H
 #define RMS_PACKET_H
@@ -12,7 +11,7 @@
  *          3 = Text + File
  */
 
-struct encrypted_packet {
+struct packet {
     uint64_t msg_id;
     uint64_t sender_id;
     uint64_t channel_id;

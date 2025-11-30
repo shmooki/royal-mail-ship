@@ -23,8 +23,7 @@ long mod_inverse(long e, long phi) {
     long x, y;
     long g = extended_gcd(e, phi, &x, &y);
     if (g != 1) return -1;
-    long result = (x % phi + phi) % phi;
-    return result;
+    return (x % phi + phi) % phi;
 }
 
 int is_prime(long n) {
@@ -67,14 +66,18 @@ extern long *encrypt(const char *plaintext, long e, long n, size_t *out_len) {
     *out_len = len;
 
     long *cipher = malloc(len * sizeof(long));
+    if (!cipher) return NULL;
+
     for (size_t i = 0; i < len; i++) {
         cipher[i] = modexp((unsigned char)plaintext[i], e, n);
     }
+
     return cipher;
 }
 
 extern char *decrypt(const long *cipher, size_t len, long d, long n) {
     char *plain = malloc(len + 1);
+    if (!plain) return NULL;
 
     for (size_t i = 0; i < len; i++) {
         plain[i] = (char)modexp(cipher[i], d, n);

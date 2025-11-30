@@ -6,15 +6,15 @@
 #include <pthread.h>
 #include <arpa/inet.h>
 #include <time.h>
-#include <dirent.h>
 #include <sys/stat.h>
+
 #include "utility.h"
 #include "rsa.h"
 #include "server_info.h"
 #include "client_info.h"
-#include "channel.h"
+#include "encrypted_packet.h"
 
-// Critical Information
+// Server File Descriptor
 int server_fd;
 
 // RSA Keys
@@ -25,35 +25,6 @@ long c_n, c_e;
 pthread_mutex_t c_lock = PTHREAD_MUTEX_INITIALIZER;
 struct client clients[CLIENTS_LIMIT] = {};
 int num_clients = 0;
-
-// Channel Management
-struct channel channels[CLIENTS_LIMIT] = {};
-int num_channels = 0;
-
-int s_init(int port) {
-    struct sockaddr_in serv = {0};
-
-    serv.sin_family = AF_INET;
-    serv.sin_port = htons(port);
-    serv.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-
-    int fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (fd < 0) return -1;
-
-    int opt = 1;
-    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
-
-    if (bind(fd, (struct sockaddr *)&serv, sizeof(serv)) < 0)
-        return -1;
-
-    if (listen(fd, CLIENTS_LIMIT) < 0)
-        return -1;
-
-    for (int i = 0; i < CLIENTS_LIMIT; i++)
-        clients[i].socket_fd = -1;
-
-    return fd;
-}
 
 int insert_client(struct client *new_client) {
     pthread_mutex_lock(&c_lock);
@@ -74,25 +45,39 @@ int insert_client(struct client *new_client) {
 void rsa_handshake(int client_fd) {
     send(client_fd, &s_n, sizeof(long), 0);
     send(client_fd, &s_e, sizeof(long), 0);
+
     recv(client_fd, &c_n, sizeof(long), 0);
     recv(client_fd, &c_e, sizeof(long), 0);
-}
 
-void channel_handshake(int client_fd, struct channel *channel) {
-    send(client_fd, channel->message_buffer, sizeof(struct encrypted_packet) * MSG_BUFFER_LIMIT, 0);
+    printf("\n• RSA Handshake with Client [%d] | Public Key (n, e): (%ld, %ld)\n", client_fd, c_n, c_e);
 }
 
 void *worker(void *arg) {
-    struct client *c = (struct client *)arg;
+    struct client *c = arg;
 
     for (;;) {
-        struct encrypted_packet p;
-        recv(c->socket_fd, &p, sizeof(struct encrypted_packet), 0);
+        struct encrypted_packet p = {0};
 
-        printf("%ld\n%s\n", p.sender_id, p.payload);
+        ssize_t r = recv(c->socket_fd, &p, sizeof(p), 0);
+        if (r <= 0) {
+            printf("• Client %d disconnected.\n", c->socket_fd);
+            close(c->socket_fd);
+            c->socket_fd = -1;
+            return NULL;
+        }
+
+        if (p.len == 0 || p.len > MAX_ENCRYPTED_PAYLOAD)
+            continue;
+
+        char *plaintext = decrypt(p.encrypted_payload, p.len, s_d, s_n);
+        if (!plaintext)
+            continue;
+
+        printf("\n• [Client %d] Sender: %lu\n• Message: %s\n\n",
+               c->socket_fd, p.sender_id, plaintext);
+
+        free(plaintext);
     }
-
-    return NULL;
 }
 
 void create_worker_thread(struct client *client) {
@@ -101,81 +86,29 @@ void create_worker_thread(struct client *client) {
     pthread_detach(t);
 }
 
-void load_channels() {
-    DIR *saves_dir = opendir("saves");
-    if (!saves_dir) {
-        mkdir("saves", 0700);
-        saves_dir = opendir("saves");
-    }
-    closedir(saves_dir);
+int s_init(int port) {
+    struct sockaddr_in serv = {0};
 
-    DIR *channels_dir = opendir("saves/channels");
-    if (!channels_dir) {
-        mkdir("saves/channels", 0700);
-        channels_dir = opendir("saves/channels");
-    }
+    serv.sin_family = AF_INET;
+    serv.sin_port = htons(port);
+    serv.sin_addr.s_addr = htonl(INADDR_ANY);
 
-    struct dirent *entry;
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) return -1;
 
-    while ((entry = readdir(channels_dir)) != NULL) {
-        if (strcmp(entry->d_name, ".") == 0 ||
-            strcmp(entry->d_name, "..") == 0)
-            continue;
+    int opt = 1;
+    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
 
-        char path[256];
-        snprintf(path, sizeof(path), "saves/channels/%s", entry->d_name);
+    if (bind(fd, (struct sockaddr *)&serv, sizeof(serv)) < 0)
+        return -1;
 
-        FILE *fp = fopen(path, "r");
-        if (!fp) continue;
+    if (listen(fd, CLIENTS_LIMIT) < 0)
+        return -1;
 
-        struct channel ch = {0};
+    for (int i = 0; i < CLIENTS_LIMIT; i++)
+        clients[i].socket_fd = -1;
 
-        fscanf(fp, "%lu\n", &ch.channel_id);
-        fgets(ch.channel_name, sizeof(ch.channel_name), fp);
-        ch.channel_name[strcspn(ch.channel_name, "\n")] = '\0';
-
-        for (int i = 0; i < 25; i++)
-            fscanf(fp, "%lu\n", &ch.participant_ids[i]);
-
-        fscanf(fp, "%d\n", &ch.gated);
-        fscanf(fp, "%d\n", &ch.gate_type);
-
-        int msg_index = 0;
-        while (msg_index < MSG_BUFFER_LIMIT) {
-            struct encrypted_packet *p = &ch.message_buffer[msg_index];
-
-            uint64_t msg_id, sender_id, timestamp;
-            int type;
-            char payload[256];
-
-            int rc = fscanf(
-                fp,
-                "%lu %lu %lu %d %[^\n]\n",
-                &msg_id,
-                &sender_id,
-                &timestamp,
-                &type,
-                payload
-            );
-
-            if (rc != 5)
-                break;
-
-            p->msg_id = msg_id;
-            p->sender_id = sender_id;
-            p->timestamp = timestamp;
-            p->type = type;
-            strncpy(p->payload, payload, sizeof(p->payload) - 1);
-
-            msg_index++;
-        }
-
-        fclose(fp);
-
-        channels[num_channels++] = ch;
-    }
-
-    closedir(channels_dir);
+    return fd;
 }
 
 int main() {
@@ -184,42 +117,33 @@ int main() {
 
     printf("Generated RSA keys:\n");
     printf("Public Key (n, e): (%ld, %ld)\n", s_n, s_e);
-    printf("Private Key (d): %ld\n", s_d);
+    printf("Private Key d: %ld\n", s_d);
 
     int port = 8080;
     printf("\n• What port to listen on?\n> ");
     scanf("%d", &port);
 
     if (port <= 0 || port > 65535) {
-        printf("• Invalid port number.\n");
+        printf("\n• Invalid port number.\n");
         return 1;
     }
 
     server_fd = s_init(port);
     if (server_fd < 0) {
-        printf("• Server failed to start.\n");
+        printf("\n• Server failed to start.\n");
         return 1;
     }
 
     flush_buffer();
 
-    int should_load_channels = 0;
-    printf("\n• Load channels from saves?\n[1] Yes\n[0] No\n> ");
-    scanf("%d", &should_load_channels);
-
-    if (should_load_channels == 1) {
-        load_channels();
-    } else {
-        printf("\n• Starting with no channels.\n");
-    }
-
-    flush_buffer();
+    printf("\n• Server started on port %d.\n", port);
 
     for (;;) {
         if (num_clients >= CLIENTS_LIMIT)
             continue;
 
         struct client *new_client = malloc(sizeof(struct client));
+        memset(new_client, 0, sizeof(struct client));
 
         int fd = accept(server_fd, NULL, NULL);
         if (fd < 0) {
@@ -230,7 +154,7 @@ int main() {
         new_client->socket_fd = fd;
 
         if (insert_client(new_client) < 0) {
-            printf("• Max clients reached. Rejecting [%d]...\n", fd);
+            printf("\n• Max clients reached, rejecting [%d]\n", fd);
             close(fd);
             free(new_client);
             continue;
