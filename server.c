@@ -85,8 +85,80 @@ void create_worker_thread(struct client *client) {
 }
 
 void load_channels() {
-    // Placeholder for loading channels from a file
-    // Implementation would go here
+    DIR *saves_dir = opendir("saves");
+    if (!saves_dir) {
+        mkdir("saves", 0700);
+        saves_dir = opendir("saves");
+    }
+    closedir(saves_dir);
+
+    DIR *channels_dir = opendir("saves/channels");
+    if (!channels_dir) {
+        mkdir("saves/channels", 0700);
+        channels_dir = opendir("saves/channels");
+    }
+
+    struct dirent *entry;
+
+    while ((entry = readdir(channels_dir)) != NULL) {
+        if (strcmp(entry->d_name, ".") == 0 ||
+            strcmp(entry->d_name, "..") == 0)
+            continue;
+
+        char path[256];
+        snprintf(path, sizeof(path), "saves/channels/%s", entry->d_name);
+
+        FILE *fp = fopen(path, "r");
+        if (!fp) continue;
+
+        struct channel ch = {0};
+
+        fscanf(fp, "%lu\n", &ch.channel_id);
+        fgets(ch.channel_name, sizeof(ch.channel_name), fp);
+        ch.channel_name[strcspn(ch.channel_name, "\n")] = '\0';
+
+        for (int i = 0; i < 25; i++)
+            fscanf(fp, "%lu\n", &ch.participant_ids[i]);
+
+        fscanf(fp, "%d\n", &ch.gated);
+        fscanf(fp, "%d\n", &ch.gate_type);
+
+        int msg_index = 0;
+        while (msg_index < MSG_BUFFER_LIMIT) {
+            struct packet *p = &ch.message_buffer[msg_index];
+
+            uint64_t msg_id, sender_id, timestamp;
+            int type;
+            char payload[256];
+
+            int rc = fscanf(
+                fp,
+                "%lu %lu %lu %d %[^\n]\n",
+                &msg_id,
+                &sender_id,
+                &timestamp,
+                &type,
+                payload
+            );
+
+            if (rc != 5)
+                break;
+
+            p->msg_id = msg_id;
+            p->sender_id = sender_id;
+            p->timestamp = timestamp;
+            p->type = type;
+            strncpy(p->payload, payload, sizeof(p->payload) - 1);
+
+            msg_index++;
+        }
+
+        fclose(fp);
+
+        channels[num_channels++] = ch;
+    }
+
+    closedir(channels_dir);
 }
 
 int main() {
@@ -115,17 +187,13 @@ int main() {
     flush_buffer();
 
     int should_load_channels = 0;
-    printf("\n• Load channels from file?\n[1] Yes\n[0] No\n> ");
+    printf("\n• Load channels from saves?\n[1] Yes\n[0] No\n> ");
     scanf("%d", &should_load_channels);
 
-    DIR *saves_dir = opendir("saves");
-    if (!saves_dir) {
-        mkdir("saves", 0700);
-    }
-
-    DIR *channels_dir = opendir("saves/channels");
-    if (!channels_dir) {
-        mkdir("saves/channels", 0700);
+    if (should_load_channels == 1) {
+        load_channels();
+    } else {
+        printf("• Starting with no channels.\n");
     }
 
     if (should_load_channels) {

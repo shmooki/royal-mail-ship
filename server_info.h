@@ -2,6 +2,7 @@
 #define RMS_SERVER_INFO_H
 
 #define CLIENTS_LIMIT 50
+#define CHANNELS_LIMIT 20
 #define PAYLOAD_SIZE_LIMIT 512
 
 #endif //RMS_SERVER_INFO_H
