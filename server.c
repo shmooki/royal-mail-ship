@@ -70,10 +70,24 @@ int insert_client(struct client *new_client) {
     return -1;
 }
 
+void rsa_handshake(int client_fd) {
+    send(client_fd, &n, sizeof(long), 0);
+    send(client_fd, &e, sizeof(long), 0);
+}
+
+void channel_handshake(int client_fd, struct channel *channel) {
+    send(client_fd, channel->message_buffer, sizeof(struct packet) * MSG_BUFFER_LIMIT, 0);
+}
+
 void *worker(void *arg) {
     struct client *c = (struct client *)arg;
 
+    for (;;) {
+        struct packet p;
+        recv(c->socket_fd, &p, sizeof(struct packet), 0);
 
+        printf("%ld\n%s\n", p.sender_id, p.payload);
+    }
 
     return NULL;
 }
@@ -193,14 +207,7 @@ int main() {
     if (should_load_channels == 1) {
         load_channels();
     } else {
-        printf("• Starting with no channels.\n");
-    }
-
-    if (should_load_channels) {
-        load_channels();
-        printf("• Channels loaded from save.\n");
-    } else {
-        printf("• Starting with no channels.\n");
+        printf("\n• Starting with no channels.\n");
     }
 
     flush_buffer();
@@ -226,6 +233,7 @@ int main() {
             continue;
         }
 
+        rsa_handshake(fd);
         create_worker_thread(new_client);
     }
 }
