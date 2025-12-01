@@ -1,8 +1,10 @@
 #pragma once
-#include <inttypes.h>
+#include "client_info.h"
 
 #ifndef RMS_PACKET_H
 #define RMS_PACKET_H
+
+#define PAYLOAD_SIZE 512
 
 /*
  * type:
@@ -17,8 +19,9 @@ struct packet {
     uint64_t sender_id;
     uint64_t channel_id;
     uint32_t timestamp;
+    char username[USERNAME_SIZE];
     int type;
-    char payload[512];
+    char payload[PAYLOAD_SIZE];
 };
 
 #endif //RMS_PACKET_H

@@ -1,29 +1,35 @@
-#include <arpa/inet.h>
-#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
 #include <unistd.h>
+#include <pthread.h>
+#include <arpa/inet.h>
+#include <time.h>
+#include <sys/stat.h>
 
-#include "encrypted_packet.h"
-#include "rsa.h"
-#include "server_info.h"
-#include "user.h"
 #include "utility.h"
+#include "rsa.h"
+#include "client_info.h"
+#include "encrypted_packet.h"
+
+#define CLIENTS_LIMIT 10
+#define CRED_FILE "client_credentials"
 
 // Server File Descriptor
 int server_fd;
+
+// RSA Keys
 long s_n, s_e, s_d;
 
-// User Management
+// Client Management
 pthread_mutex_t u_lock = PTHREAD_MUTEX_INITIALIZER;
-struct user users[USERS_LIMIT] = {};
+struct client users[CLIENTS_LIMIT];
 int num_users = 0;
+FILE *cred_file = NULL;
 
-int insert_user(struct user *new_user) {
+int insert_user(struct client *new_user) {
     pthread_mutex_lock(&u_lock);
-    for (int i = 0; i < USERS_LIMIT; i++) {
+    for (int i = 0; i < CLIENTS_LIMIT; i++) {
         if (users[i].socket_fd == -1) {
             users[i] = *new_user;
             num_users++;
@@ -35,172 +41,109 @@ int insert_user(struct user *new_user) {
     return -1;
 }
 
-struct user *find_user_by_username(char *username) {
-    pthread_mutex_lock(&u_lock);
-    for (int i = 0; i < USERS_LIMIT; i++) {
-        if (users[i].socket_fd != -1 && strcmp(users[i].username, username) == 0) {
-            pthread_mutex_unlock(&u_lock);
-            return &users[i];
-        }
+int find_user_index_by_username(const char *username) {
+    for (int i = 0; i < CLIENTS_LIMIT; i++) {
+        if (strcmp(users[i].username, username) == 0)
+            return i;
     }
-    pthread_mutex_unlock(&u_lock);
-    return NULL;
-}
 
-void rsa_handshake(struct user *u) {
-    send(u->socket_fd, &s_n, sizeof(long), 0);
-    send(u->socket_fd, &s_e, sizeof(long), 0);
-
-    long c_n, c_e;
-    recv(u->socket_fd, &c_n, sizeof(long), 0);
-    recv(u->socket_fd, &c_e, sizeof(long), 0);
-
-    u->public_key_n = c_n;
-    u->public_key_e = c_e;
-}
-
-char *strip_slash(char *str) {
-    if (!str || str[0] != '/') return str;
-    return str + 1;
-}
-
-int command_parser(char *cmd) {
-    if (strcmp(cmd, "signup") == 0) return 0;
-    if (strcmp(cmd, "login") == 0) return 1;
     return -1;
 }
 
-int n = 0;
-
-int handle_signup(struct user *u) {
-    long encrypted_username[32];
-    long encrypted_password[64];
-
-    if (recv(u->socket_fd, encrypted_username, sizeof(encrypted_username), 0) <= 0) return -1;
-    if (recv(u->socket_fd, encrypted_password, sizeof(encrypted_password), 0) <= 0) return -1;
-
-    char *username = decrypt(encrypted_username, sizeof(encrypted_username) / sizeof(long), s_d, s_n);
-    char *password = decrypt(encrypted_password, sizeof(encrypted_password) / sizeof(long), s_d, s_n);
-
-    printf("• Decrypted signup data: %s / %s\n", username ? username : "(null)", password ? password : "(null)");
-
-    if (!username || !password || strlen(username) >= MAX_CRED_LEN || strlen(password) >= MAX_CRED_LEN) {
-        if (username) free(username);
-        if (password) {
-            memset(password, 0, strlen(password));
-            free(password);
-        }
-        return -1;
-    }
-
-    printf("• Signup attempt: %s\n", username);
-
-    if (find_user_by_username(username)) {
-        free(username);
-        memset(password, 0, strlen(password));
-        free(password);
-        return -1;
-    }
-
-    struct user new_u = {0};
-    new_u.socket_fd = u->socket_fd;
-    strncpy(new_u.username, username, sizeof(new_u.username) - 1);
-    strncpy(new_u.password, password, sizeof(new_u.password) - 1);
-    new_u.public_key_e = u->public_key_e;
-    new_u.public_key_n = u->public_key_n;
-
+void broadcast(const char *msg, uint64_t sender_id, int exclude_fd) {
     pthread_mutex_lock(&u_lock);
-    FILE *file = fopen("users", "a");
-    if (!file) {
-        pthread_mutex_unlock(&u_lock);
-        free(username);
-        memset(password, 0, strlen(password));
-        free(password);
-        return -1;
-    }
-    fprintf(file, "%s\n%s\n", new_u.username, new_u.password);
-    fclose(file);
-    insert_user(&new_u);
-    pthread_mutex_unlock(&u_lock);
+    for (int i = 0; i < CLIENTS_LIMIT; i++) {
+        if (users[i].socket_fd == -1 || users[i].socket_fd == exclude_fd) continue;
 
-    free(username);
-    memset(password, 0, strlen(password));
-    free(password);
-    return 0;
-}
+        struct client *u = &users[i];
+        size_t enc_len;
+        long *enc = encrypt(msg, u->public_key_e, u->public_key_n, &enc_len);
+        if (!enc) continue;
 
-int handle_login(struct user *u) {
-    long encrypted_username[32];
-    long encrypted_password[64];
+        if (enc_len > MAX_ENCRYPTED_PAYLOAD) enc_len = MAX_ENCRYPTED_PAYLOAD;
 
-    if (recv(u->socket_fd, encrypted_username, sizeof(encrypted_username), 0) <= 0) return -1;
-    if (recv(u->socket_fd, encrypted_password, sizeof(encrypted_password), 0) <= 0) return -1;
+        struct encrypted_packet p = {0};
+        p.sender_id = sender_id;
+        p.len = enc_len;
+        strncpy(p.username, u->username, USERNAME_SIZE - 1);
 
-    char *username = decrypt(encrypted_username, sizeof(encrypted_username) / sizeof(long), s_d, s_n);
-    char *password = decrypt(encrypted_password, sizeof(encrypted_password) / sizeof(long), s_d, s_n);
-    if (!username || !password) return -1;
+        for (size_t j = 0; j < enc_len; j++)
+            p.encrypted_payload[j] = enc[j];
 
-    pthread_mutex_lock(&u_lock);
-    struct user *existing_user = find_user_by_username(username);
-    int result = -1;
-
-    if (existing_user && strcmp(existing_user->password, password) == 0) {
-        u->socket_fd = existing_user->socket_fd;
-        strncpy(u->username, existing_user->username, sizeof(u->username) - 1);
-        u->public_key_e = existing_user->public_key_e;
-        u->public_key_n = existing_user->public_key_n;
-        result = 0;
+        send(u->socket_fd, &p, sizeof(p), 0);
+        free(enc);
     }
     pthread_mutex_unlock(&u_lock);
-
-    free(username);
-    free(password);
-    return result;
 }
 
-void command_handler(struct user *u, int cmd) {
-    if (cmd == 0) handle_signup(u);
-    else if (cmd == 1) handle_login(u);
+void rsa_handshake(int fd, struct client *u) {
+    send(fd, &s_n, sizeof(long), 0);
+    send(fd, &s_e, sizeof(long), 0);
+
+    recv(fd, &u->public_key_n, sizeof(long), 0);
+    recv(fd, &u->public_key_e, sizeof(long), 0);
+
+    printf("• RSA Handshake with User [%d] | Public Key (n, e): (%ld, %ld)\n",
+           fd, u->public_key_n, u->public_key_e);
+}
+
+char *recv_decrypted(int fd, long d, long n) {
+    struct encrypted_packet p = {0};
+    ssize_t r = recv(fd, &p, sizeof(p), 0);
+    if (r <= 0 || p.len == 0 || p.len > MAX_ENCRYPTED_PAYLOAD)
+        return NULL;
+
+    char *plaintext = decrypt(p.encrypted_payload, p.len, d, n);
+    return plaintext;
 }
 
 void *worker(void *arg) {
-    struct user *u = arg;
+    struct client *u = arg;
     for (;;) {
-        struct encrypted_packet p = {0};
-        ssize_t r = recv(u->socket_fd, &p, sizeof(p), 0);
-
-        if (r <= 0) {
-            printf("• User %s disconnected.\n", u->username);
+        char *msg = recv_decrypted(u->socket_fd, s_d, s_n);
+        if (!msg) {
+            printf("• User %d disconnected.\n", u->socket_fd);
             close(u->socket_fd);
             u->socket_fd = -1;
-            pthread_mutex_lock(&u_lock);
-            num_users--;
-            pthread_mutex_unlock(&u_lock);
-            free(u);
             return NULL;
         }
 
-        if (p.len == 0 || p.len > MAX_ENCRYPTED_PAYLOAD) continue;
+        printf("\nUser [%s]:\n%s\n",
+               u->username, msg);
 
-        char *plaintext = decrypt(p.encrypted_payload, p.len, s_d, s_n);
-        if (!plaintext) continue;
-
-        printf("\n• [User %s] ID: %lu\n• Message: %s\n\n", u->username, p.sender_id, plaintext);
-
-        if (plaintext[0] == '/') {
-            char *cmd_str = strip_slash(plaintext);
-            int parsed_cmd = command_parser(cmd_str);
-            command_handler(u, parsed_cmd);
-        }
-
-        free(plaintext);
+        broadcast(msg, u->user_id, u->socket_fd);
+        free(msg);
     }
 }
 
-void create_worker_thread(struct user *u) {
+void create_worker_thread(struct client *u) {
     pthread_t t;
     pthread_create(&t, NULL, worker, u);
     pthread_detach(t);
+}
+
+void load_credentials() {
+    printf("\n• Loading credentials from file...\n");
+
+    fseek(cred_file, 0, SEEK_SET);
+    char line[128];
+    while (fgets(line, sizeof(line), cred_file)) {
+        char username[USERNAME_SIZE] = {0};
+        char password[PASSWORD_SIZE] = {0};
+        sscanf(line, "%31s %31s", username, password);
+
+        struct client u = {0};
+        strncpy(u.username, username, USERNAME_SIZE - 1);
+        strncpy(u.password, password, PASSWORD_SIZE - 1);
+        u.socket_fd = -1;
+
+        if (find_user_index_by_username(username) == -1 && strlen(username) > 0 && strlen(password) > 0) {
+            insert_user(&u);
+            printf("• Loaded Credential > Username: %s, Password: %s\n", username, password);
+        }
+    }
+
+    printf("• Finished loading credentials. Total users: %d...\n\n", num_users);
 }
 
 int s_init(int port) {
@@ -216,112 +159,114 @@ int s_init(int port) {
     setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
 
     if (bind(fd, (struct sockaddr *)&serv, sizeof(serv)) < 0) return -1;
-    if (listen(fd, USERS_LIMIT) < 0) return -1;
+    if (listen(fd, CLIENTS_LIMIT) < 0) return -1;
 
-    for (int i = 0; i < USERS_LIMIT; i++) users[i].socket_fd = -1;
+    for (int i = 0; i < CLIENTS_LIMIT; i++) users[i].socket_fd = -1;
 
-    FILE *file = fopen("users", "a+");
-    if (!file) return -1;
-
-    char line[256];
-    while (fgets(line, sizeof(line), file)) {
-        line[strcspn(line, "\r\n")] = '\0';
-        char username_buf[USERNAME_SIZE] = {0};
-        strncpy(username_buf, line, sizeof(username_buf) - 1);
-
-        if (!fgets(line, sizeof(line), file)) break;
-        line[strcspn(line, "\r\n")] = '\0';
-        char password_buf[PASSWORD_SIZE] = {0};
-        strncpy(password_buf, line, sizeof(password_buf) - 1);
-
-        struct user u = {0};
-        u.socket_fd = -1;
-        strncpy(u.username, username_buf, sizeof(u.username) - 1);
-        strncpy(u.password, password_buf, sizeof(u.password) - 1);
-        insert_user(&u);
+    cred_file = fopen(CRED_FILE, "a+");
+    if (!cred_file) {
+        printf("• Failed to open credentials file.\n");
+        return -1;
     }
-    fclose(file);
 
+    load_credentials();
     return fd;
 }
 
 int main() {
-    printf("%d\n", n++);
     srand(time(NULL));
     generate_rsa_keys(&s_n, &s_e, &s_d);
 
-    printf("Generated RSA keys:\nPublic Key (n, e): (%ld, %ld)\nPrivate Key (d): (%ld)\n", s_n, s_e, s_d);
+    printf("• Generated RSA keys:\n");
+    printf("• Public Key (n, e): (%ld, %ld)\n", s_n, s_e);
+    printf("• Private Key d: %ld\n", s_d);
 
     int port = 8080;
     printf("\n• What port to listen on?\n> ");
     scanf("%d", &port);
-    if (port <= 0 || port > 65535) return 1;
+    flush_buffer();
+
+    if (port <= 0 || port > 65535) {
+        printf("• Invalid port number.\n");
+        return 1;
+    }
 
     server_fd = s_init(port);
-    if (server_fd < 0) return 1;
-    flush_buffer();
+    if (server_fd < 0) {
+        printf("\n• Server failed to start.\n");
+        return 1;
+    }
+
     printf("\n• Server started on port %d.\n", port);
 
     for (;;) {
-        if (num_users >= USERS_LIMIT) {
-            sleep(1);
-            continue;
-        }
+        if (num_users >= CLIENTS_LIMIT) continue;
 
-        struct user *new_user = malloc(sizeof(struct user));
-        memset(new_user, 0, sizeof(struct user));
+        struct client *u = malloc(sizeof(struct client));
+        memset(u, 0, sizeof(struct client));
+        u->socket_fd = -1;
 
         int fd = accept(server_fd, NULL, NULL);
         if (fd < 0) {
-            free(new_user);
+            free(u);
             continue;
         }
+        u->socket_fd = fd;
 
-        new_user->socket_fd = fd;
-        rsa_handshake(new_user);
+        rsa_handshake(fd, u);
 
-        printf("%d\n", n++);
-        struct encrypted_packet p = {0};
-        if (recv(fd, &p, sizeof(p), 0) <= 0) {
+        char *username = recv_decrypted(fd, s_d, s_n);
+        char *password = recv_decrypted(fd, s_d, s_n);
+
+        printf("• Received credentials from [%d]: Username='%s', Password='%s'\n",
+               fd,
+               username ? username : "NULL",
+               password ? password : "NULL");
+
+        if (!username || !password || strlen(username) >= USERNAME_SIZE || strlen(password) >= PASSWORD_SIZE) {
+            printf("• Invalid username/password from [%d], disconnecting.\n", fd);
             close(fd);
-            free(new_user);
-            continue;
-        }
-        printf("%d\n", n++);
-
-        char *plaintext = decrypt(p.encrypted_payload, p.len, s_d, s_n);
-        if (!plaintext) {
-            close(fd);
-            free(new_user);
+            free(u);
+            free(username);
+            free(password);
             continue;
         }
 
-        printf("• Received initial command: %s\n", plaintext);
-        printf("%d\n", n++);
+        int idx = find_user_index_by_username(username);
 
-        if (plaintext[0] == '/') {
-            printf("%d\n", n++);
-            char *cmd_str = strip_slash(plaintext);
-            int cmd = command_parser(cmd_str);
-
-            if (cmd == 0) handle_signup(new_user);
-            else if (cmd == 1 && handle_login(new_user) < 0) {
-                printf("• Login failed for socket %d\n", fd);
+        if (idx != -1) {
+            if (strcmp(users[idx].password, password) != 0) {
+                printf("• Incorrect password for '%s' from [%d], disconnecting.\n", username, fd);
                 close(fd);
-                free(new_user);
-                free(plaintext);
+                free(u);
+                free(username);
+                free(password);
                 continue;
             }
+
+            printf("• User '%s' reconnected from [%d].\n", username, fd);
+            *u = users[idx];
+            u->socket_fd = fd;
+        } else {
+            strncpy(u->username, username, USERNAME_SIZE - 1);
+            strncpy(u->password, password, PASSWORD_SIZE - 1);
+            fprintf(cred_file, "%s %s\n", u->username, u->password);
+            fflush(cred_file);
+
+            u->socket_fd = fd;
+            printf("• New user '%s' registered from [%d].\n", u->username, fd);
         }
 
-        free(plaintext);
+        free(username);
+        free(password);
 
-        if (insert_user(new_user) < 0) {
+        if (insert_user(u) < 0) {
+            printf("• Max users reached, rejecting [%d]\n", fd);
             close(fd);
-            free(new_user);
+            free(u);
             continue;
         }
 
-        create_worker_thread(new_user);
+        create_worker_thread(u);
     }
 }
