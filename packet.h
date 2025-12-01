@@ -1,4 +1,5 @@
 #pragma once
+#include <inttypes.h>
 
 #ifndef RMS_PACKET_H
 #define RMS_PACKET_H

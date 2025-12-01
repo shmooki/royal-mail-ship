@@ -61,7 +61,7 @@ long modexp(long base, long exp, long mod) {
     return result;
 }
 
-extern long *encrypt(const char *plaintext, long e, long n, size_t *out_len) {
+extern long *encrypt(char *plaintext, long e, long n, size_t *out_len) {
     size_t len = strlen(plaintext);
     *out_len = len;
 
@@ -75,7 +75,7 @@ extern long *encrypt(const char *plaintext, long e, long n, size_t *out_len) {
     return cipher;
 }
 
-extern char *decrypt(const long *cipher, size_t len, long d, long n) {
+extern char *decrypt(long *cipher, size_t len, long d, long n) {
     char *plain = malloc(len + 1);
     if (!plain) return NULL;
 
