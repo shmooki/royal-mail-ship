@@ -8,6 +8,7 @@
 #include "utility.h"
 #include "rsa.h"
 #include "encrypted_packet.h"
+#include "channel.h"
 
 // Server File Descriptor
 int server_fd = -1;
@@ -23,7 +24,7 @@ void rsa_handshake(int fd) {
     send(fd, &c_n, sizeof(long), 0);
     send(fd, &c_e, sizeof(long), 0);
 
-    printf("\n• RSA Handshake | Public Key (n, e): (%ld, %ld)\n", s_n, s_e);
+    //printf("\n• RSA Handshake | Public Key (n, e): (%ld, %ld)\n", s_n, s_e);
 }
 
 int c_init(const char *ip, int port) {
@@ -110,11 +111,18 @@ int main() {
     int port = 8080;
 
     printf("• Enter server IP:\n> ");
-    fgets(ip, sizeof(ip), stdin);
+    if (!fgets(ip, sizeof(ip), stdin)){
+        printf("Input error.\n");
+        return 1;
+    }
+
     ip[strcspn(ip, "\n")] = 0;
 
     printf("\n• Enter port:\n> ");
-    scanf("%d", &port);
+    if(scanf("%d", &port) != 1){
+        printf("Invalid input.\n");
+        return 1;
+    }
     flush_buffer();
 
     if (c_init(ip, port) < 0) {

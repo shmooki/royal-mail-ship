@@ -13,6 +13,7 @@
 #include "server_info.h"
 #include "client_info.h"
 #include "encrypted_packet.h"
+#include "channel.h"
 
 // Server File Descriptor
 int server_fd;
@@ -121,7 +122,10 @@ int main() {
 
     int port = 8080;
     printf("\n• What port to listen on?\n> ");
-    scanf("%d", &port);
+    if(scanf("%d", &port) != 1){
+        printf("Invalid input.\n");
+        return 1;
+    }
 
     if (port <= 0 || port > 65535) {
         printf("\n• Invalid port number.\n");
