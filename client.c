@@ -9,6 +9,9 @@
 #include "rsa.h"
 #include "encrypted_packet.h"
 
+// Client Information
+int user_id = -1;
+
 // Server File Descriptor
 int server_fd = -1;
 
@@ -26,7 +29,7 @@ void rsa_handshake(int fd) {
     printf("\n• RSA Handshake | Public Key (n, e): (%ld, %ld)\n", s_n, s_e);
 }
 
-void send_encrypted(int fd, const char *payload, long e, long n) {
+void send_encrypted(int fd, char *payload, long e, long n) {
     size_t enc_len;
     long *cipher = encrypt(payload, e, n, &enc_len);
     if (!cipher)
@@ -82,10 +85,13 @@ void *message_bar_thread() {
 
     for (;;) {
         printf("> ");
+        fflush(stdout);
+
         if (!fgets(input, sizeof(input), stdin))
             continue;
 
         input[strcspn(input, "\n")] = 0;
+
         if (strlen(input) == 0)
             continue;
 
@@ -96,7 +102,7 @@ void *message_bar_thread() {
 
         struct encrypted_packet p = {0};
 
-        p.sender_id  = generate_uuid(10);
+        p.sender_id  = user_id;
         p.channel_id = 1;
         p.msg_id     = generate_uuid(10);
         p.timestamp  = (uint32_t)time(NULL);
@@ -126,7 +132,7 @@ void *payload_receiver_thread() {
         if (!plaintext)
             continue;
 
-        printf("\n[%lu] %s\n> ", p.sender_id, plaintext);
+        printf("[%s] %s\n> ", p.username, plaintext);
         fflush(stdout);
 
         free(plaintext);
@@ -165,6 +171,8 @@ int main() {
 
     send_encrypted(server_fd, username, s_e, s_n);
     send_encrypted(server_fd, password, s_e, s_n);
+
+    user_id = atoi(recv_decrypted(server_fd, c_d, c_n));
 
     printf("\n");
 
