@@ -1,13 +1,13 @@
 #pragma once
-#include <inttypes.h>
-#include "packet.h"
 
 #ifndef RMS_CHANNEL_H
 #define RMS_CHANNEL_H
 
+#define CHANNEL_NAME_SIZE 32
+#define MAX_PARTICIPANTS 25
+
 /*
  * channel file structure:
- * channel_id
  * channel_name
  * participant_ids_1
  * participant_ids_2
@@ -27,19 +27,24 @@
  * gate_type:
  *          0 = DM
  *          1 = Group
- *          2 = Public
- *          3 = Private
  */
 
-#define MSG_BUFFER_LIMIT 128
+#define MSG_BUFFER_LIMIT 32
+
+struct msg {
+    uint64_t msg_id;
+    uint64_t sender_id;
+    uint32_t timestamp;
+    char content[512];
+};
 
 struct channel {
     uint64_t channel_id;
-    char channel_name[64];
-    uint64_t participant_ids[25];
+    char channel_name[CHANNEL_NAME_SIZE];
+    uint64_t participant_ids[MAX_PARTICIPANTS];
     int gated;
     int gate_type;
-    struct encrypted_packet message_buffer[MSG_BUFFER_LIMIT];
+    struct msg messages[MSG_BUFFER_LIMIT];
 };
 
 #endif //RMS_CHANNEL_H

@@ -11,6 +11,7 @@
 
 // Client Information
 int user_id = -1;
+int selected_channel = 1;
 
 // Server File Descriptor
 int server_fd = -1;

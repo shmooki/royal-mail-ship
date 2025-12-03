@@ -6,14 +6,16 @@
 #include <arpa/inet.h>
 #include <time.h>
 #include <inttypes.h>
-#include <sys/sendfile.h>
+#include <dirent.h>
+#include <sys/stat.h>
 
 #include "utility.h"
 #include "rsa.h"
 #include "client_info.h"
 #include "encrypted_packet.h"
+#include "server_info.h"
+#include "channel.h"
 
-#define CLIENTS_LIMIT 10
 #define CRED_FILE "client_credentials"
 
 // Server File Descriptor
@@ -66,6 +68,69 @@ int find_user_index_by_user_id(uint64_t user_id) {
     }
     pthread_mutex_unlock(&u_lock);
     return -1;
+}
+
+// Channel Management
+pthread_mutex_t c_lock = PTHREAD_MUTEX_INITIALIZER;
+struct channel channels[CHANNELS_LIMIT];
+int num_channels = 0;
+FILE *channels_file = NULL;
+
+void load_channel(uint64_t channel_id) {
+    char filename[64];
+    snprintf(filename, sizeof(filename), "%lu", (unsigned long)channel_id);
+
+    DIR *dir = opendir("channels");
+    if (!dir) {
+        mkdir("channels", 0700);
+        dir = opendir("channels");
+        if (!dir) return;
+    }
+
+    struct channel *ch = {0};
+    struct dirent *entry;
+    while ((entry = readdir(dir)) != NULL) {
+        if (strcmp(entry->d_name, filename) == 0) {
+            char filepath[128];
+            snprintf(filepath, sizeof(filepath), "channels/%s", entry->d_name);
+            channels_file = fopen(filepath, "r");
+
+            if (fgets(ch->channel_name, CHANNEL_NAME_SIZE, channels_file)) {
+                ch->channel_name[strcspn(ch->channel_name, "\n")] = 0;
+            }
+
+            for (int i = 0; i < MAX_PARTICIPANTS; i++) {
+                char line[64];
+                if (fgets(line, sizeof(line), channels_file)) {
+                    ch->participant_ids[i] = strtoull(line, NULL, 10);
+                } else {
+                    break;
+                }
+            }
+
+            char line[16];
+            if (fgets(line, sizeof(line), channels_file)) {
+                ch->gated = atoi(line);
+            }
+            if (fgets(line, sizeof(line), channels_file)) {
+                ch->gate_type = atoi(line);
+            }
+
+            for (int i = 0; i < MSG_BUFFER_LIMIT; i++) {
+                char msg_line[1024];
+                if (fgets(msg_line, sizeof(msg_line), channels_file)) {
+                    struct msg *m = &ch->messages[i];
+                    sscanf(msg_line, "%lu %lu %u %[^\n]",
+                           (unsigned long *)&m->msg_id,
+                           (unsigned long *)&m->sender_id,
+                           &m->timestamp,
+                           m->content);
+                } else {
+                    break;
+                }
+            }
+        }
+    }
 }
 
 void broadcast(const char *msg, uint64_t sender_id, int exclude_fd) {
@@ -373,6 +438,11 @@ int main() {
         char user_id_str[32];
         snprintf(user_id_str, sizeof(user_id_str), "%lu", (unsigned long)u->user_id);
         send_encrypted(u->socket_fd, user_id_str, u->public_key_e, u->public_key_n);
+
+        char *channel_id_str = recv_decrypted(u->socket_fd, s_d, s_n);
+        u->selected_channel = atoi(channel_id_str);
+        printf("• User '%s' selected channel: %s\n", u->username, channel_id_str ? channel_id_str : "NULL");
+        free(channel_id_str);
 
         create_worker_thread(u);
     }
