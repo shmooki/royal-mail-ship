@@ -9,6 +9,7 @@ struct client {
     uint64_t user_id;
     char username[32];
     char password[64];
+    int selected_channel;
     long public_key_e;
     long public_key_n;
 };
