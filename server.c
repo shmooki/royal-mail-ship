@@ -304,6 +304,7 @@ int main() {
         }
 
         int idx = find_user_index_by_username(username);
+
         struct client *u = NULL;
 
         if (idx != -1) {

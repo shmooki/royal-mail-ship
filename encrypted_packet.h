@@ -4,7 +4,7 @@
 #ifndef ENCRYPTED_PACKET_H
 #define ENCRYPTED_PACKET_H
 
-#define MAX_ENCRYPTED_PAYLOAD 512
+#define MAX_ENCRYPTED_PAYLOAD 128
 
 struct encrypted_packet {
     uint64_t sender_id;
