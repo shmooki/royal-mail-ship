@@ -50,9 +50,7 @@ void send_encrypted(int fd, char *payload, long e, long n) {
         p.encrypted_payload[i] = cipher[i];
 
     p.len = enc_len;
-
     send(fd, &p, sizeof(p), 0);
-
     free(cipher);
 }
 
@@ -117,7 +115,6 @@ void send_file(const char *filepath, uint64_t channel_id){
         p.chunk_index = chunk_index;
         p.total_chunks = total_chunks;
         
-        // Encrypt file metadata (not the actual file data for performance)
         char metadata[256];
         snprintf(metadata, sizeof(metadata), "FILE:%s:%lu:%u:%u", 
                 filename, file_size, chunk_index, total_chunks);
@@ -135,7 +132,6 @@ void send_file(const char *filepath, uint64_t channel_id){
             free(cipher);
         }
         
-        // Copy raw file data
         memcpy(p.file_data, buffer, bytes_read);
         p.len = bytes_read; 
         
@@ -164,14 +160,10 @@ void handle_incoming_file(struct encrypted_packet *p){
     
     if (response[0] == 'y' || response[0] == 'Y') {
         printf("Downloading to: downloads/\n");
-        
-        // Create downloads directory
         mkdir("downloads", 0755);
         
         char filepath[512];
         snprintf(filepath, sizeof(filepath), "downloads/%s", p->file_name);
-        
-        // In a real implementation, you would request the file chunks from server
         printf("File info received. Use /getfile %s to download.\n", p->file_name);
     }
 }
@@ -217,7 +209,6 @@ void *message_bar_thread() {
         if (strlen(input) == 0)
             continue;
         
-        // Check for commands
         if (strncmp(input, "/file ", 6) == 0){
             char *filepath = input + 6;
             uint64_t channel_id = 1; 
@@ -237,8 +228,7 @@ void *message_bar_thread() {
             p.channel_id = generate_uuid(8);
             
             size_t enc_len;
-            long *cipher = encrypt(input + 8, s_e, s_n, &enc_len);
-            
+            long *cipher = encrypt(input + 8, s_e, s_n, &enc_len);        
             if (cipher){
 
                 p.len = (uint32_t)enc_len;
@@ -305,31 +295,24 @@ void *message_bar_thread() {
                 continue;
             }
             
-            // Extract channel identifier
             int channel_len = space_pos - channel_identifier;
             char channel_str[64] = {0};
             strncpy(channel_str, channel_identifier, channel_len);
             channel_str[channel_len] = '\0';
             
-            // Message starts after the space
             char *message = space_pos + 1;
-            
-            // Check if channel_str is numeric
             char *endptr;
             uint64_t channel_id = strtoull(channel_str, &endptr, 10);
             
-            // Prepare the full message
             char full_message[1024];
             if (*endptr == '\0'){
                 snprintf(full_message, sizeof(full_message), "ID:%" PRIu64 ":%s", channel_id, message);
             } else{
                 snprintf(full_message, sizeof(full_message), "NAME:%s:%s", channel_str, message);
             }
-            
-            // Encrypt and send
+
             size_t enc_len = 0;
-            long *cipher = encrypt(full_message, s_e, s_n, &enc_len);
-            
+            long *cipher = encrypt(full_message, s_e, s_n, &enc_len);     
             if (!cipher) {
                 printf("[ERROR] Failed to encrypt message\n");
                 continue;
@@ -353,7 +336,6 @@ void *message_bar_thread() {
             free(cipher);
             continue;
         } else if (input[0] == '/'){
-            // Unknown command
             printf("Unknown command. Available commands:\n");
             printf("  /create <name> - Create new channel\n");
             printf("  /join <id_or_name>       - Join a channel\n");
@@ -366,10 +348,10 @@ void *message_bar_thread() {
         size_t enc_len = 0;
         long *cipher = encrypt(input, s_e, s_n, &enc_len);
 
-        if (!cipher) continue;
+        if (!cipher) 
+            continue;
 
         struct encrypted_packet p = {0};
-
         p.sender_id  = user_id;
         p.channel_id = current_channel_id;
         p.msg_id     = generate_uuid(10);
@@ -384,7 +366,6 @@ void *message_bar_thread() {
             p.encrypted_payload[i] = cipher[i];
 
         send(server_fd, &p, sizeof(p), 0);
-
         free(cipher);
     }
 }
@@ -420,8 +401,7 @@ void *payload_receiver_thread() {
             continue;
         
         printf("[%s] %s\n> ", p.username, plaintext);
-        fflush(stdout);
-        
+        fflush(stdout);     
         free(plaintext);
     }
 }

@@ -39,7 +39,6 @@ int channel_create(struct channel_manager *cm, const char *name,
     cm->subscription_count++; 
     cm->channel_count++;
     
-    // Save to file
     channel_save_to_file(cm, channel_id);
     pthread_mutex_unlock(&cm->lock);
     return channel_id;
@@ -54,7 +53,7 @@ struct channel *channel_find(struct channel_manager *cm, uint64_t channel_id){
     return NULL;
 }
 
-struct channel *channel_find_by_name(struct channel_manager *cm, const char *name) {
+struct channel *channel_find_by_name(struct channel_manager *cm, const char *name){
     for (int i = 0; i < cm->channel_count; i++) {
         if (strcmp(cm->channels[i].channel_name, name) == 0) {
             return &cm->channels[i];
@@ -73,7 +72,6 @@ int channel_join(struct channel_manager *cm, uint64_t channel_id, uint64_t user_
         return -1;
     }
     
-    // Check if already member
     for (int i = 0; i < ch->participant_count; i++){
         if (ch->participant_ids[i] == user_id) {
             pthread_mutex_unlock(&cm->lock);
@@ -81,11 +79,9 @@ int channel_join(struct channel_manager *cm, uint64_t channel_id, uint64_t user_
         }
     }
     
-    // Add to participants
     ch->participant_ids[ch->participant_count] = user_id;
     ch->participant_count++;
     
-    // Add subscription
     cm->subscriptions[cm->subscription_count].channel_id = channel_id;
     cm->subscriptions[cm->subscription_count].user_id = user_id;
     cm->subscriptions[cm->subscription_count].joined_at = time(NULL);

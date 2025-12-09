@@ -82,7 +82,8 @@ void broadcast_to_channel(const char *msg, uint64_t sender_id, uint64_t channel_
         printf("[ERROR] Channel %" PRIu64 " not found for broadcast\n", channel_id);
         return;
     } 
-       
+    
+    // retrieve user id
     int sender_idx = find_user_index_by_user_id(sender_id);
     if (sender_idx != -1) {
         pthread_mutex_lock(&u_lock);
@@ -90,36 +91,38 @@ void broadcast_to_channel(const char *msg, uint64_t sender_id, uint64_t channel_
         pthread_mutex_unlock(&u_lock);
     }
     
+    // set the packet vars for the message
     p.sender_id = sender_id;
     p.channel_id = channel_id;
     p.timestamp = (uint32_t)time(NULL);
-    
-    if (strncmp(msg, "FILE_METADATA:", 14) == 0){
-        
+
+    // file handling logic (if file is sent)
+    if (strncmp(msg, "FILE_METADATA:", 14) == 0){    
         p.is_file = 1;
         const char *src = msg + 14;
         size_t src_len = strlen(src);
         char *metadata = malloc(src_len + 1);
 
-        if (metadata != NULL) {
-            memcpy(metadata, src, src_len + 1); 
-            char *filename = strtok(metadata, ":");
-            char *filesize_str = strtok(NULL, ":");
-            char *channel_id_str = strtok(NULL, ":");
+        if (metadata != NULL) 
+            return;
 
-            if (filename && filesize_str && channel_id_str) {
-                strncpy(p.file_name, filename, sizeof(p.file_name) - 1);
-                p.file_name[sizeof(p.file_name) - 1] = '\0';
-                p.file_size = (unsigned long) atol(filesize_str);
-                p.channel_id = (uint64_t) atol(channel_id_str);
-            }
-            free(metadata);
-        }
-    }
+        memcpy(metadata, src, src_len + 1); 
+        char *filename = strtok(metadata, ":");
+        char *filesize_str = strtok(NULL, ":");
+        char *channel_id_str = strtok(NULL, ":");
+
+        if (!filename && !filesize_str && !channel_id_str)
+            return;
+        
+        strncpy(p.file_name, filename, sizeof(p.file_name) - 1);
+        p.file_name[sizeof(p.file_name) - 1] = '\0';
+        p.file_size = (unsigned long) atol(filesize_str);
+        p.channel_id = (uint64_t) atol(channel_id_str);
+        free(metadata);
+}
     
     for (int i = 0; i < ch->participant_count; i++){
         uint64_t participant_id = ch->participant_ids[i];
-        
         if (exclude_fd != -1 && participant_id == sender_id) 
             continue;
         
@@ -129,16 +132,15 @@ void broadcast_to_channel(const char *msg, uint64_t sender_id, uint64_t channel_
             continue;
         
         struct client *recipient = &users[user_id];
-        
         size_t enc_len;
         long *enc = encrypt(msg, recipient->public_key_e, recipient->public_key_n, &enc_len);
-        if (!enc) continue;
+        if (!enc) 
+            continue;
 
         if (enc_len > MAX_ENCRYPTED_PAYLOAD) 
             enc_len = MAX_ENCRYPTED_PAYLOAD;
 
         p.len = enc_len;
-
         for (size_t j = 0; j < enc_len; j++){
             p.encrypted_payload[j] = enc[j];
         }
@@ -173,7 +175,6 @@ void send_encrypted(int fd, char *payload, long e, long n) {
         p.encrypted_payload[i] = cipher[i];
 
     p.len = enc_len;
-
     send(fd, &p, sizeof(p), 0);
     free(cipher);
 }
@@ -193,7 +194,8 @@ void combine_file_chunks(const char *dir, const char *filename, uint32_t total_c
     snprintf(full_path, sizeof(full_path), "%s/%s", dir, filename);
     
     FILE *output = fopen(full_path, "wb");
-    if (!output) return;
+    if (!output) 
+        return;
     
     for (uint32_t i = 0; i < total_chunks; i++) {
         char chunk_path[512];
@@ -207,7 +209,7 @@ void combine_file_chunks(const char *dir, const char *filename, uint32_t total_c
                 fwrite(buffer, 1, bytes, output);
             }
             fclose(chunk);
-            unlink(chunk_path); // Remove chunk file
+            unlink(chunk_path); 
         }
     }
     
@@ -221,30 +223,31 @@ void handle_message(struct client *u, struct encrypted_packet *p, char *msg){
     if (strncmp(msg, "ID:", 3) == 0){
         char *id_str = msg + 3;
         char *colon = strchr(id_str, ':');
-        if (colon){
-            *colon = '\0';
-            actual_channel_id = strtoull(id_str, NULL, 10);
-            message_content = colon + 1;
-        }
+        if (!colon)
+            return;
+        
+        *colon = '\0';
+        actual_channel_id = strtoull(id_str, NULL, 10);
+        message_content = colon + 1;
     } else if(strncmp(msg, "NAME:", 5) == 0){
         char *name = msg + 5;
         char *colon = strchr(name, ':');
-        if (colon) {
-            *colon = '\0';
-            struct channel *ch = channel_find_by_name(&cm, name);
-            if (ch){
-                actual_channel_id = ch->channel_id;
-                message_content = colon + 1;
-            } else{
-                char error[128];
-                snprintf(error, sizeof(error), "Channel '%s' not found", name);
-                send_encrypted(u->socket_fd, error, u->public_key_e, u->public_key_n);
-                printf("[ERROR] Channel '%s' not found\n", name);
-                return;
-            }
+        if (!colon) 
+            return;
+        
+        *colon = '\0';
+        struct channel *ch = channel_find_by_name(&cm, name);
+        if (ch){
+            actual_channel_id = ch->channel_id;
+            message_content = colon + 1;
+        } else{
+            char error[128];
+            snprintf(error, sizeof(error), "Channel '%s' not found", name);
+            send_encrypted(u->socket_fd, error, u->public_key_e, u->public_key_n);
+            printf("[ERROR] Channel '%s' not found\n", name);
+            return;
         }
     } else if (actual_channel_id == 0) {
-        // No channel specified and no prefix
         char *error = "Please specify channel with /msg <channel> <message>";
         send_encrypted(u->socket_fd, error, u->public_key_e, u->public_key_n);
         printf("[ERROR] No channel specified in message\n");
@@ -254,7 +257,6 @@ void handle_message(struct client *u, struct encrypted_packet *p, char *msg){
     printf("• User [%s | %" PRIu64 "] in channel %" PRIu64 ":\n%s\n",
            u->username, u->user_id, actual_channel_id, message_content);
     
-    // Check if user is member of channel
     if (!channel_is_member(&cm, actual_channel_id, u->user_id)) {
         char *error = "You are not a member of this channel";
         send_encrypted(u->socket_fd, error, u->public_key_e, u->public_key_n);
@@ -272,12 +274,10 @@ void handle_file_transfer(struct client *u, struct encrypted_packet *p) {
         return;
     }
     
-    // Create directory for files if it doesn't exist
     char channel_dir[256];
     snprintf(channel_dir, sizeof(channel_dir), "channel_%lu_files", p->channel_id);
     mkdir(channel_dir, 0755);
     
-    // Save file chunk
     char file_path[512];
     snprintf(file_path, sizeof(file_path), "%s/%s.part%u", 
              channel_dir, p->file_name, p->chunk_index);
@@ -287,7 +287,6 @@ void handle_file_transfer(struct client *u, struct encrypted_packet *p) {
         fwrite(p->file_data, 1, p->len, file);
         fclose(file);
         
-        // If this is the last chunk, combine all parts
         if (p->chunk_index == p->total_chunks - 1){
             combine_file_chunks(channel_dir, p->file_name, p->total_chunks);
  
@@ -296,21 +295,16 @@ void handle_file_transfer(struct client *u, struct encrypted_packet *p) {
                     "[FILE] %s (%lu bytes)", p->file_name, p->file_size);
             channel_add_message(&cm, p->channel_id, u->user_id, file_message, MSG_TYPE_FILE);
 
-            // Notify channel members about the file
             char notification[512];
             snprintf(notification, sizeof(notification),
                     "[FILE] %s uploaded: %s (%lu bytes)", 
                     u->username, p->file_name, p->file_size);
-
-            // Use channel-specific broadcast
             broadcast_to_channel(notification, u->user_id, p->channel_id, u->socket_fd);
             
-            // Also send file metadata
             char file_metadata[512];
             snprintf(file_metadata, sizeof(file_metadata),
                     "FILE_METADATA:%s:%lu:%lu", 
                     p->file_name, p->file_size, p->channel_id);
-            
             broadcast_to_channel(file_metadata, u->user_id, p->channel_id, u->socket_fd);
         }
     }
@@ -319,16 +313,13 @@ void handle_file_transfer(struct client *u, struct encrypted_packet *p) {
 void handle_channel_create(struct client *u, const char *channel_info) {
     char channel_name[CHANNEL_NAME_SIZE] = {0};
     
-    // Parse the input
-    sscanf(channel_info, "%31s", channel_name);
-    
+    sscanf(channel_info, "%31s", channel_name);   
     if (strlen(channel_name) == 0) {
         char *error = "Usage: /create <channel_name>";
         send_encrypted(u->socket_fd, error, u->public_key_e, u->public_key_n);
         return;
     }
     
-    // Check if channel name already exists
     struct channel *existing = channel_find_by_name(&cm, channel_name);
     if (existing) {
         char error[128];
@@ -338,30 +329,24 @@ void handle_channel_create(struct client *u, const char *channel_info) {
         return;
     }   
     
-    // Create the channel
-    uint64_t channel_id = channel_create(&cm, channel_name, u->user_id);
-    
+    uint64_t channel_id = channel_create(&cm, channel_name, u->user_id);  
     if (channel_id == 0){
         char *error = "Failed to create channel (max channels reached?)";
         send_encrypted(u->socket_fd, error, u->public_key_e, u->public_key_n);
         return;
     }
     
-    // Success message
     char success_msg[256];
     snprintf(success_msg, sizeof(success_msg),
             "Channel '%s' created successfully! ID: %" PRIu64 "\n"
             "You have been automatically joined to this channel.\n"
             "Use '/join %lu' or '/join %s' to join from other sessions.",
             channel_name, channel_id, channel_id, channel_name);
-    
     send_encrypted(u->socket_fd, success_msg, u->public_key_e, u->public_key_n);
     
-    // Log system message to channel
     char system_msg[256];
     snprintf(system_msg, sizeof(system_msg),
             "Channel created by %s. Welcome!", u->username);
-
     channel_add_message(&cm, channel_id, u->user_id, system_msg, MSG_TYPE_TEXT);
 }
 
@@ -370,13 +355,11 @@ void handle_channel_join(struct client *u, const char *channel_input){
     char channel_name[CHANNEL_NAME_SIZE] = {0};
     struct channel *ch =  NULL;
 
-    // Try to parse as channel ID (numeric)
     char *endptr;
     channel_id = strtoul(channel_input, &endptr, 10);
-    
     if (*endptr != '\0'){
         ch = channel_find_by_name(&cm, channel_input);
-        if (ch) {
+        if (ch){
             channel_id = ch->channel_id;
             strncpy(channel_name, ch->channel_name, sizeof(channel_name) - 1);
             channel_name[sizeof(channel_name) - 1] = '\0';
@@ -395,8 +378,6 @@ void handle_channel_join(struct client *u, const char *channel_input){
         }
     }
     
-    // // Check if channel exists
-    // struct channel *ch = channel_find(&cm, channel_id);
     if (!ch) {
         char error[128];
         snprintf(error, sizeof(error), "Channel %lu not found", channel_id);
@@ -404,7 +385,6 @@ void handle_channel_join(struct client *u, const char *channel_input){
         return;
     }  
     
-    // Try to join the channel
     int result = channel_join(&cm, channel_id, u->user_id);
     if (result == 0){
         char success_msg[512];
@@ -420,11 +400,9 @@ void handle_channel_join(struct client *u, const char *channel_input){
                     "Successfully joined channel ID: %lu\n"
                     "Members: %d",
                     channel_id, ch->participant_count);
-        }
-        
+        }     
         send_encrypted(u->socket_fd, success_msg, u->public_key_e, u->public_key_n);
-        
-        // Notify channel members
+
         char join_msg[256];
         snprintf(join_msg, sizeof(join_msg),
                 "%s has joined the channel.", u->username);
@@ -436,10 +414,10 @@ void handle_channel_join(struct client *u, const char *channel_input){
 
 void *worker(void *arg) {
     struct client *u = arg;
-    if (!u) return NULL;
+    if (!u) 
+        return NULL;
 
     for (;;){
-
         struct encrypted_packet p = {0};
         ssize_t rec = recv(u->socket_fd, &p, sizeof(p), 0);
         printf("sizeof(encrypted_packet) = %zu\n", sizeof(struct encrypted_packet));
@@ -539,10 +517,12 @@ int s_init(int port) {
     int opt = 1;
     setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
 
-    if (bind(fd, (struct sockaddr *)&serv, sizeof(serv)) < 0) return -1;
-    if (listen(fd, CLIENTS_LIMIT) < 0) return -1;
+    if (bind(fd, (struct sockaddr *)&serv, sizeof(serv)) < 0) 
+        return -1;
+    if (listen(fd, CLIENTS_LIMIT) < 0) 
+        return -1;
 
-    for (int i = 0; i < CLIENTS_LIMIT; i++) {
+    for (int i = 0; i < CLIENTS_LIMIT; i++){
         users[i].socket_fd = -1;
         users[i].username[0] = '\0';
         users[i].password[0] = '\0';
@@ -552,7 +532,7 @@ int s_init(int port) {
     }
 
     cred_file = fopen(CRED_FILE, "a+");
-    if (!cred_file) {
+    if (!cred_file){
         printf("• Failed to open credentials file.\n");
         return -1;
     }
@@ -590,10 +570,9 @@ int main() {
     }
 
     printf("• Server started on port %d.\n", port);
-
     for (;;) {
         int fd = accept(server_fd, NULL, NULL);
-        if (fd < 0) {
+        if (fd < 0){
             perror("accept");
             continue;
         }
@@ -607,7 +586,6 @@ int main() {
 
         char *username = recv_decrypted(fd, s_d, s_n);
         char *password = recv_decrypted(fd, s_d, s_n);
-
         printf("• Received credentials from [%d]: Username='%s', Password='%s'\n",
                fd,
                username ? username : "NULL",
@@ -623,7 +601,6 @@ int main() {
 
         int idx = find_user_index_by_username(username);
         struct client *u = NULL;
-
         if (idx != -1) {
             pthread_mutex_lock(&u_lock);
             if (strcmp(users[idx].password, password) != 0) {
@@ -648,7 +625,6 @@ int main() {
             users[idx].public_key_e = t.public_key_e;
             users[idx].public_key_n = t.public_key_n;
             pthread_mutex_unlock(&u_lock);
-
             u = &users[idx];
             printf("• User '%s' reconnected from [%d].\n", username, fd);
         } else {
@@ -675,12 +651,10 @@ int main() {
             }
 
             u = &users[idx];
-
             pthread_mutex_lock(&u_lock);
             fprintf(cred_file, "%s %s %" PRIu64 "\n", u->username, u->password, u->user_id);
             fflush(cred_file);
             pthread_mutex_unlock(&u_lock);
-
             printf("• New user '%s' registered from [%d].\n", username, fd);
         }
 
@@ -689,8 +663,8 @@ int main() {
 
         char user_id_str[32];
         snprintf(user_id_str, sizeof(user_id_str), "%lu", (unsigned long)u->user_id);
-        send_encrypted(u->socket_fd, user_id_str, u->public_key_e, u->public_key_n);
 
+        send_encrypted(u->socket_fd, user_id_str, u->public_key_e, u->public_key_n);
         create_worker_thread(u);
     }
 }
