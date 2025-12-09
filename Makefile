@@ -2,7 +2,7 @@ CC := gcc
 CFLAGS := -std=c11 -Wall -Wextra -O2 -g
 LDFLAGS := -pthread
 
-SRCS_COMMON := rsa.c utility.c
+SRCS_COMMON := rsa.c utility.c channel.c
 SRCS_SERVER := server.c
 SRCS_CLIENT := client.c
 
@@ -20,7 +20,6 @@ server: $(OBJS_COMMON) $(OBJS_SERVER)
 client: $(OBJS_COMMON) $(OBJS_CLIENT)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
-# Generic rule to build .o from .c
 %.o: %.c
 	$(CC) $(CFLAGS) -c $< -o $@
 

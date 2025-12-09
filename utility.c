@@ -7,8 +7,8 @@ void flush_buffer(void) {
     while ((c = getchar()) != '\n' && c != EOF);
 }
 
-int generate_uuid(int length) {
-    int uuid = 0;
+uint64_t generate_uuid(int length) {
+    uint64_t uuid = 0;
     for (int i = 0; i < length; i++) {
         uuid = uuid * 10 + (rand() % 10);
     }
